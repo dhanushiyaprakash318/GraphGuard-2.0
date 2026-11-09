@@ -26,6 +26,13 @@ vi.mock("./api/client", () => ({
   fetchTransactions: vi.fn().mockResolvedValue({ total: 0, page: 1, page_size: 10, items: [] }),
   fetchProbabilityDistribution: vi.fn().mockResolvedValue({ bins: [] }),
   predictTransaction: vi.fn(),
+  fetchFabricSyncStatus: vi.fn().mockResolvedValue({
+    enabled: false,
+    interval_seconds: 30,
+    worker_running: false,
+    incoming_table: "graphguard_incoming_events_stream_v5",
+    fabric_configured: false,
+  }),
   getApiBaseUrl: () => "http://localhost:8000",
 }));
 

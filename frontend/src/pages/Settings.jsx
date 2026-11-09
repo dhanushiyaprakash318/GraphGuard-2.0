@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 
-import { fetchHealth, getApiBaseUrl } from "../api/client";
+import { fetchFabricSyncStatus, fetchHealth, getApiBaseUrl } from "../api/client";
 
 export default function Settings() {
   const [health, setHealth] = useState(null);
+  const [syncStatus, setSyncStatus] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -12,8 +13,14 @@ export default function Settings() {
     async function load() {
       try {
         setLoading(true);
-        const data = await fetchHealth();
-        if (!cancelled) setHealth(data);
+        const [data, sync] = await Promise.all([
+          fetchHealth(),
+          fetchFabricSyncStatus().catch(() => null),
+        ]);
+        if (!cancelled) {
+          setHealth(data);
+          setSyncStatus(sync);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err.response?.data?.detail || err.message || "Health check failed");
@@ -70,6 +77,32 @@ export default function Settings() {
             />
             <Row label="Workspace" value={fabric?.workspace || "—"} />
             <Row label="Lakehouse" value={fabric?.lakehouse || "—"} />
+            <Row
+              label="Incoming table"
+              value={fabric?.incoming_table || "—"}
+            />
+            <Row
+              label="Predictions table"
+              value={fabric?.predictions_table || "—"}
+            />
+            <Row
+              label="Sync enabled"
+              value={
+                syncStatus?.enabled != null ? String(syncStatus.enabled) : "—"
+              }
+            />
+            <Row
+              label="Sync worker running"
+              value={
+                syncStatus?.worker_running != null
+                  ? String(syncStatus.worker_running)
+                  : "—"
+              }
+            />
+            <Row
+              label="Sync interval (s)"
+              value={syncStatus?.interval_seconds ?? "—"}
+            />
             <Row
               label="Gold tables found"
               value={

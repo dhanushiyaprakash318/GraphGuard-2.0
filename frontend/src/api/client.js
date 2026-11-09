@@ -46,3 +46,8 @@ export async function predictTransaction(transaction) {
   const { data } = await api.post("/predict", { transaction });
   return data;
 }
+
+export async function fetchFabricSyncStatus() {
+  const { data } = await api.get("/fabric/sync-status");
+  return data;
+}

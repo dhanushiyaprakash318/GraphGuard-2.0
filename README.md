@@ -5,18 +5,23 @@ AI-powered fraud detection platform built on the IEEE-CIS Fraud Detection datase
 ## Architecture
 
 ```text
-React Dashboard  -->  FastAPI  -->  LightGBM Predictor
-                         |                |
-                         v                v
-                    PostgreSQL      (optional) Fabric Eventstream
-                         |
-                         v
-                  Analytics / History APIs
+React Dashboard --> FastAPI --> LightGBM --> PostgreSQL --> Analytics / History
+                     |
+                     | 1) publish raw IEEE-CIS txn (CloudEvents)
+                     v
+              Fabric Eventstream (GraphGuard_API)
+                     |
+                     v
+              Lakehouse incoming table (stream v5)
+                     |
+                     v
+              Background sync (30s) --> LightGBM --> PostgreSQL
 ```
 
-- **Offline / API scoring:** upload a transaction JSON → preprocess with the saved training config → LightGBM probability → risk category → persist to PostgreSQL → dashboard analytics.
-- **Fabric:** credential-gated service layer. Without env credentials the API reports `fabric.status = not_configured` and does not claim a live Lakehouse connection.
-- **Realtime Eventstream:** optional publish after prediction when `FABRIC_EVENTSTREAM_URL` is set. Not advertised as verified until credentials and an ingest endpoint are provided and tested.
+- **API scoring:** upload transaction JSON → LightGBM (438 features) → risk category → PostgreSQL → dashboard.
+- **Realtime Fabric:** `/predict` publishes the **raw** transaction to Eventstream **before** scoring; Lakehouse destination receives IEEE-CIS columns; a background worker polls the incoming table and upserts new scores into PostgreSQL (idempotent).
+- **Without Fabric credentials:** `/health` reports `fabric.status = not_configured`; Eventstream publish is skipped; API scoring still works.
+- **Not implemented:** writing prediction rows back to `realtime_fraud_predictions` (Postgres is the scoring store).
 
 ## Repository layout
 
@@ -90,7 +95,7 @@ npm install
 npm run dev
 ```
 
-Vite proxies `/predict`, `/health`, `/transactions`, and `/analytics` to `http://127.0.0.1:8000`.
+Vite proxies `/predict`, `/health`, `/transactions`, `/analytics`, and `/fabric` to `http://127.0.0.1:8000`.
 
 ## API endpoints
 
@@ -98,12 +103,16 @@ Vite proxies `/predict`, `/health`, `/transactions`, and `/analytics` to `http:/
 |--------|------|-------------|
 | GET | `/` | App status |
 | GET | `/health` | Model, DB, Fabric health |
-| POST | `/predict` | Score one transaction and persist |
+| POST | `/predict` | Publish raw txn to Eventstream, score, persist |
 | POST | `/predict/batch` | Score up to `BATCH_MAX_SIZE` (default 100) |
 | GET | `/transactions` | History with search / risk filter / pagination |
 | GET | `/analytics/summary` | Counts, fraud rate, risk distribution |
 | GET | `/analytics/trends` | Time-bucketed fraud stats |
 | GET | `/analytics/probability-distribution` | Probability histogram bins |
+| POST | `/fabric/sync-incoming` | Manual Lakehouse → score → Postgres sync |
+| GET | `/fabric/sync-status` | Background sync worker status |
+| GET | `/fabric/incoming/{id}` | Read-only Lakehouse incoming lookup |
+| GET | `/fabric/predictions/{id}` | Read-only Fabric prediction-table presence |
 
 ### Predict request
 
@@ -142,7 +151,7 @@ Risk bands: Low `< 0.10`, Medium `[0.10, 0.30)`, High `[0.30, 0.70)`, Critical `
 - **Fraud Detection** – JSON upload, feature inspection, prediction result
 - **Analytics** – distribution / risk / trend / probability charts
 - **Transactions** – searchable, filterable, paginated history
-- **Settings** – read-only health and configuration (no secrets)
+- **Settings** – read-only health, Fabric tables, and sync worker status (no secrets)
 
 Hardcoded IEEE dataset demo values are not used as live metrics.
 
@@ -180,10 +189,10 @@ Set these in `.env` (never commit real secrets):
 | `FABRIC_CLIENT_ID` | Entra app client ID |
 | `FABRIC_CLIENT_SECRET` | Entra app client secret |
 | `FABRIC_TENANT_ID` | Entra tenant ID |
-| `FABRIC_EVENTSTREAM_URL` | Optional Eventstream / custom ingest HTTPS URL |
-| `FABRIC_EVENTHUB_CONNECTION_STRING` | Custom endpoint connection string (secret) |
-| `FABRIC_EVENTHUB_NAME` | Custom endpoint Event hub name |
-| `FABRIC_INCOMING_TABLE` | Incoming Lakehouse table (default `graphguard_incoming_events_stream_v5`) |
+| `FABRIC_EVENTHUB_CONNECTION_STRING` | Event Hubs custom endpoint (active producer) |
+| `FABRIC_EVENTHUB_NAME` | Event hub name from the Custom endpoint |
+| `FABRIC_EVENTSTREAM_URL` | Optional HTTPS ingest (unused when Event Hub is set) |
+| `FABRIC_INCOMING_TABLE` | Exact Lakehouse incoming table name (must match Fabric) |
 | `FABRIC_PREDICTIONS_TABLE` | Predictions table for read-only checks |
 | `FABRIC_SYNC_ENABLED` | Background Lakehouse→Postgres sync (default `true`) |
 | `FABRIC_SYNC_INTERVAL_SECONDS` | Sync poll interval (default `30`) |
@@ -191,17 +200,18 @@ Set these in `.env` (never commit real secrets):
 | `FABRIC_MAX_RETRIES` | Retry count (default 2) |
 
 **Known workspace assets:** `GraphGuard_Fabric_Analytics` / `GraphGuard_Lakehouse` / `ES_GraphGuard_Lakehouse`  
-**Incoming destination:** set `FABRIC_INCOMING_TABLE` to the exact Fabric table (live: stream v5, raw IEEE-CIS)  
-**Gold tables probed (read-only):** `gold_fraud_summary`, `gold_product_fraud_metrics`, `gold_time_fraud_metrics`, `gold_device_fraud_metrics`  
+**Producer source:** Event Hubs custom endpoint (`FABRIC_EVENTHUB_*`), UI name `GraphGuard_API`  
+**Incoming table:** set `FABRIC_INCOMING_TABLE` to the **exact** Lakehouse name (verified live table uses stream v5 with raw IEEE-CIS columns; match spelling exactly)  
+**Gold tables:** read-only discovery only — never modified  
 
-Background sync polls the incoming table, scores new IDs with LightGBM, and upserts PostgreSQL. Manual trigger: `POST /fabric/sync-incoming`. Status: `GET /fabric/sync-status`.
+Background sync polls the incoming table every `FABRIC_SYNC_INTERVAL_SECONDS`, scores new IDs, and upserts PostgreSQL. Manual: `POST /fabric/sync-incoming`. Status: `GET /fabric/sync-status`. Verify script: `scripts/verify_fabric_auto_sync.sh`.
 
-Until credentials are provided in local `.env` (never commit secrets):
+Without credentials in local `.env` (never commit secrets):
 
 1. `/health` → `fabric.status = "not_configured"`
-2. SQL probes and gold table discovery do not run
+2. SQL probes do not run
 3. Eventstream publish is skipped (`status: skipped`)
-4. Power BI remains external
+4. Local `/predict` + Postgres still work
 
 See [docs/FABRIC.md](docs/FABRIC.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
@@ -225,9 +235,9 @@ See [`.env.example`](.env.example) for all supported variables. `.env` is gitign
 
 | Target | Status |
 |--------|--------|
-| Docker Compose (API + web + Postgres) | Prepared in-repo; verify with `docker compose up --build` |
-| Cloud (Azure / Fabric hosting) | **Not deployed** — requires your cloud subscription and Fabric permissions |
-| Fabric live integration | **Blocked** on credentials listed above |
+| Docker Compose (API + web + Postgres) | Supported — `docker compose up --build` |
+| Cloud (Azure hosting) | **Not deployed** — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| Fabric realtime ingest + auto-sync | **Verified** when `.env` Fabric credentials + Event Hub + incoming table are set |
 
 ## License / dataset
 
