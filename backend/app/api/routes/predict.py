@@ -31,7 +31,10 @@ def _to_detail(result: dict) -> PredictionDetail:
 
 @router.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest, db: Session = Depends(get_db)) -> PredictResponse:
-    settings = get_settings()
+    # 1) Ingest raw transaction to Eventstream BEFORE scoring
+    fabric_publish = fabric_service.publish_transaction_event(request.transaction)
+
+    # 2) Score with existing LightGBM pipeline (unchanged)
     try:
         result = predictor_service.predict(request.transaction)
     except ModelNotLoadedError as exc:
@@ -44,6 +47,7 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)) -> PredictRe
             status_code=400, detail=f"Prediction failed: {type(exc).__name__}"
         ) from exc
 
+    # 3) Persist prediction to PostgreSQL only (not to transaction Eventstream)
     try:
         save_prediction(db, result)
     except Exception as exc:  # noqa: BLE001
@@ -52,18 +56,12 @@ def predict(request: PredictRequest, db: Session = Depends(get_db)) -> PredictRe
             status_code=503, detail="Prediction succeeded but persistence failed"
         ) from exc
 
-    fabric_service.publish_prediction_event(
-        {
-            **result,
-            "model_version": settings.model_version,
-        }
-    )
-
     logger.info(
-        "Predicted transaction_id=%s risk=%s fraud=%s",
+        "Predicted transaction_id=%s risk=%s fraud=%s fabric=%s",
         result["transaction_id"],
         result["risk_category"],
         result["predicted_fraud"],
+        fabric_publish.get("status"),
     )
 
     return PredictResponse(
@@ -93,11 +91,9 @@ def predict_batch(
 
     for item in request.transactions:
         try:
+            fabric_service.publish_transaction_event(item)
             result = predictor_service.predict(item)
             save_prediction(db, result)
-            fabric_service.publish_prediction_event(
-                {**result, "model_version": settings.model_version}
-            )
             results.append(
                 BatchPredictResultItem(
                     success=True,

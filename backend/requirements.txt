@@ -16,3 +16,6 @@ pytest==8.3.5
 pytest-asyncio==0.26.0
 aiosqlite==0.21.0
 greenlet==3.2.1
+pyodbc==5.2.0
+respx==0.22.0
+azure-eventhub==5.14.0

@@ -8,6 +8,7 @@ from app.api.routes import api_router
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.db.session import init_db
+from app.services.fabric_sync_worker import fabric_sync_worker
 from app.services.predictor import predictor_service
 
 setup_logging()
@@ -28,8 +29,12 @@ async def lifespan(_: FastAPI):
     except Exception:
         logger.exception("Failed to initialize database")
         raise
-    yield
-    logger.info("Shutting down %s", settings.app_name)
+    await fabric_sync_worker.start()
+    try:
+        yield
+    finally:
+        await fabric_sync_worker.stop()
+        logger.info("Shutting down %s", settings.app_name)
 
 
 app = FastAPI(

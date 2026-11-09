@@ -181,17 +181,29 @@ Set these in `.env` (never commit real secrets):
 | `FABRIC_CLIENT_SECRET` | Entra app client secret |
 | `FABRIC_TENANT_ID` | Entra tenant ID |
 | `FABRIC_EVENTSTREAM_URL` | Optional Eventstream / custom ingest HTTPS URL |
+| `FABRIC_EVENTHUB_CONNECTION_STRING` | Custom endpoint connection string (secret) |
+| `FABRIC_EVENTHUB_NAME` | Custom endpoint Event hub name |
+| `FABRIC_INCOMING_TABLE` | Incoming Lakehouse table (default `graphguard_incoming_events_stream_v5`) |
+| `FABRIC_PREDICTIONS_TABLE` | Predictions table for read-only checks |
+| `FABRIC_SYNC_ENABLED` | Background Lakehouse→Postgres sync (default `true`) |
+| `FABRIC_SYNC_INTERVAL_SECONDS` | Sync poll interval (default `30`) |
 | `FABRIC_TIMEOUT_SECONDS` | HTTP timeout (default 10) |
 | `FABRIC_MAX_RETRIES` | Retry count (default 2) |
 
-**Missing today (external blockers):** no Fabric credentials are present in this repository. Until they are provided:
+**Known workspace assets:** `GraphGuard_Fabric_Analytics` / `GraphGuard_Lakehouse` / `ES_GraphGuard_Lakehouse`  
+**Incoming destination:** set `FABRIC_INCOMING_TABLE` to the exact Fabric table (live: stream v5, raw IEEE-CIS)  
+**Gold tables probed (read-only):** `gold_fraud_summary`, `gold_product_fraud_metrics`, `gold_time_fraud_metrics`, `gold_device_fraud_metrics`  
+
+Background sync polls the incoming table, scores new IDs with LightGBM, and upserts PostgreSQL. Manual trigger: `POST /fabric/sync-incoming`. Status: `GET /fabric/sync-status`.
+
+Until credentials are provided in local `.env` (never commit secrets):
 
 1. `/health` → `fabric.status = "not_configured"`
-2. Lakehouse table reads are not executed
+2. SQL probes and gold table discovery do not run
 3. Eventstream publish is skipped (`status: skipped`)
-4. Power BI remains external; reuse the existing semantic model outside this app when available
+4. Power BI remains external
 
-Known Fabric assets referenced by the project (verify access separately): `bronze_*`, `silver_*`, `gold_*`, `graphguard_incoming_events`, `incoming_transactions`, `realtime_fraud_predictions`.
+See [docs/FABRIC.md](docs/FABRIC.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Model artifact policy
 

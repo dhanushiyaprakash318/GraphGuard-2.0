@@ -17,7 +17,9 @@ def test_health(client):
     assert data["model_type"] == "LGBMClassifier"
     assert data["feature_count"] == 438
     assert data["threshold"] == 0.1
+    # Fabric env cleared in conftest so this stays deterministic in Compose
     assert data["fabric"]["status"] == "not_configured"
+    assert data["fabric"]["configured"] is False
     assert data["database"]["status"] == "ok"
 
 

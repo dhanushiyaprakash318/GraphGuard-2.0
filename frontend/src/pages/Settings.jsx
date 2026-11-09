@@ -28,6 +28,8 @@ export default function Settings() {
     };
   }, []);
 
+  const fabric = health?.fabric;
+
   return (
     <div className="max-w-3xl space-y-6">
       <div>
@@ -55,11 +57,29 @@ export default function Settings() {
           <Row label="Threshold" value={health.threshold ?? "—"} />
           <Row label="Model version" value={health.model_version} />
           <Row label="Database" value={health.database?.status || "—"} />
-          <Row label="Fabric status" value={health.fabric?.status || "—"} />
-          <Row
-            label="Fabric detail"
-            value={health.fabric?.detail || "—"}
-          />
+
+          <div className="border-t border-slate-700 pt-4">
+            <h2 className="mb-3 text-base font-semibold text-white">Microsoft Fabric</h2>
+            <Row label="Status" value={fabric?.status || "—"} />
+            <Row label="Configured" value={String(fabric?.configured ?? false)} />
+            <Row label="Token OK" value={String(fabric?.token_ok ?? false)} />
+            <Row label="SQL OK" value={String(fabric?.sql_ok ?? false)} />
+            <Row
+              label="Eventstream configured"
+              value={String(fabric?.eventstream_configured ?? false)}
+            />
+            <Row label="Workspace" value={fabric?.workspace || "—"} />
+            <Row label="Lakehouse" value={fabric?.lakehouse || "—"} />
+            <Row
+              label="Gold tables found"
+              value={
+                fabric?.tables_found?.length
+                  ? fabric.tables_found.join(", ")
+                  : "—"
+              }
+            />
+            <Row label="Detail" value={fabric?.detail || "—"} />
+          </div>
         </div>
       )}
     </div>
@@ -70,7 +90,7 @@ function Row({ label, value }) {
   return (
     <div className="flex flex-col gap-1 border-b border-slate-800 py-3 last:border-0 sm:flex-row sm:justify-between">
       <span className="text-slate-400">{label}</span>
-      <span className="font-medium text-white break-all">{value}</span>
+      <span className="break-all font-medium text-white">{value}</span>
     </div>
   );
 }

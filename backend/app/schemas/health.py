@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FabricHealth(BaseModel):
@@ -8,6 +8,13 @@ class FabricHealth(BaseModel):
     configured: bool
     sql_endpoint_set: bool = False
     eventstream_configured: bool = False
+    token_ok: bool = False
+    sql_ok: bool = False
+    tables_found: list[str] = Field(default_factory=list)
+    workspace: str | None = None
+    lakehouse: str | None = None
+    incoming_table: str | None = None
+    predictions_table: str | None = None
     detail: str | None = None
 
 

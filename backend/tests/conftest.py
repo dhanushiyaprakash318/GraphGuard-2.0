@@ -15,6 +15,20 @@ os.environ["CORS_ORIGINS"] = "http://testserver"
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 # Avoid loading a host .env that may contain JSON-style list values
 os.environ.setdefault("MODEL_VERSION", "graphguard-lgbm-v1")
+# Background Fabric poller must not run during unit tests
+os.environ["FABRIC_SYNC_ENABLED"] = "false"
+# Isolate unit tests from Compose-injected Fabric credentials
+for _fabric_key in (
+    "FABRIC_SQL_ENDPOINT",
+    "FABRIC_DATABASE",
+    "FABRIC_TENANT_ID",
+    "FABRIC_CLIENT_ID",
+    "FABRIC_CLIENT_SECRET",
+    "FABRIC_EVENTHUB_CONNECTION_STRING",
+    "FABRIC_EVENTHUB_NAME",
+    "FABRIC_EVENTSTREAM_URL",
+):
+    os.environ.pop(_fabric_key, None)
 
 from app.core.config import get_settings
 from app.db.models import Base
