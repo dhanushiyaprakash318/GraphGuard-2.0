@@ -1,0 +1,2 @@
+# Recommended for the trained model artifact (enable Git LFS before migrating):
+# backend/app/models/*.joblib filter=lfs diff=lfs merge=lfs -text

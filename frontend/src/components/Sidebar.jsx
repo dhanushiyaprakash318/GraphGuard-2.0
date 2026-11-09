@@ -1,4 +1,3 @@
-
 import {
   LayoutDashboard,
   ShieldAlert,
@@ -6,6 +5,8 @@ import {
   Receipt,
   Settings,
   ShieldCheck,
+  Menu,
+  X,
 } from "lucide-react";
 
 const menuItems = [
@@ -16,22 +17,30 @@ const menuItems = [
   { name: "Settings", icon: Settings },
 ];
 
-export default function Sidebar({ activePage, setActivePage }) {
-  return (
-    <aside className="w-64 min-h-screen bg-[#0d1525] border-r border-slate-800 p-5 hidden md:flex flex-col shrink-0">
-      <div className="flex items-center gap-3 mb-10">
-        <div className="bg-blue-600 p-2 rounded-xl">
-          <ShieldCheck size={24} />
+export default function Sidebar({ activePage, setActivePage, mobileOpen, setMobileOpen }) {
+  const Nav = (
+    <>
+      <div className="mb-10 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-blue-600 p-2">
+            <ShieldCheck size={24} />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold">GraphGuard</h2>
+            <p className="text-xs text-slate-400">Fraud Intelligence</p>
+          </div>
         </div>
-        <div>
-          <h2 className="font-bold text-lg">GraphGuard</h2>
-          <p className="text-xs text-slate-400">Fraud Intelligence</p>
-        </div>
+        <button
+          type="button"
+          className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 md:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close menu"
+        >
+          <X size={18} />
+        </button>
       </div>
 
-      <p className="text-xs text-slate-500 uppercase tracking-wider mb-4">
-        Main Menu
-      </p>
+      <p className="mb-4 text-xs uppercase tracking-wider text-slate-500">Main Menu</p>
 
       <nav className="space-y-2">
         {menuItems.map((item) => {
@@ -41,8 +50,12 @@ export default function Sidebar({ activePage, setActivePage }) {
           return (
             <button
               key={item.name}
-              onClick={() => setActivePage(item.name)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm transition ${
+              type="button"
+              onClick={() => {
+                setActivePage(item.name);
+                setMobileOpen(false);
+              }}
+              className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm transition ${
                 isActive
                   ? "bg-blue-600 text-white"
                   : "text-slate-400 hover:bg-slate-800 hover:text-white"
@@ -57,10 +70,45 @@ export default function Sidebar({ activePage, setActivePage }) {
 
       <div className="mt-auto border-t border-slate-800 pt-5">
         <p className="text-xs text-slate-500">GraphGuard 2.0</p>
-        <p className="text-xs text-slate-600 mt-1">
-          AI Fraud Detection Platform
-        </p>
+        <p className="mt-1 text-xs text-slate-600">AI Fraud Detection Platform</p>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      <div className="fixed left-0 right-0 top-0 z-30 flex items-center justify-between border-b border-slate-800 bg-[#0d1525] px-4 py-3 md:hidden">
+        <div className="flex items-center gap-2">
+          <ShieldCheck size={20} className="text-blue-400" />
+          <span className="font-semibold">GraphGuard</span>
+        </div>
+        <button
+          type="button"
+          className="rounded-lg p-2 text-slate-300 hover:bg-slate-800"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+        >
+          <Menu size={20} />
+        </button>
+      </div>
+
+      <aside className="hidden min-h-screen w-64 shrink-0 flex-col border-r border-slate-800 bg-[#0d1525] p-5 md:flex">
+        {Nav}
+      </aside>
+
+      {mobileOpen && (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60"
+            aria-label="Close overlay"
+            onClick={() => setMobileOpen(false)}
+          />
+          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col border-r border-slate-800 bg-[#0d1525] p-5">
+            {Nav}
+          </aside>
+        </div>
+      )}
+    </>
   );
 }

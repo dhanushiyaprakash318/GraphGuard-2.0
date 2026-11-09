@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.py[cod]
 .env
@@ -6,4 +7,19 @@ __pycache__/
 !.env.example
 .vscode/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .DS_Store
+*.db
+*.sqlite3
+backend/graphguard.db
+node_modules/
+frontend/dist/
+coverage/
+.coverage
+htmlcov/
+*.egg-info/
+.idea/
+# Prefer Git LFS / private artifact storage for model binaries.
+# The checked-in bundle remains for now; do not add additional .joblib copies.
+*.joblib.bak
