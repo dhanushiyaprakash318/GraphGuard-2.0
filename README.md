@@ -1,69 +1,106 @@
 # GraphGuard 2.0
 
-AI-powered fraud detection platform built on the IEEE-CIS Fraud Detection dataset, a trained LightGBM model (438 features, threshold **0.10**), FastAPI, React, PostgreSQL, and optional Microsoft Fabric integration.
+AI-powered fraud detection platform on the IEEE-CIS dataset: **LightGBM** (438 features, threshold **0.10**), **FastAPI**, **React**, **Supabase PostgreSQL** (operational scores / dashboard), and **Microsoft Fabric** (Eventstream ingest + Lakehouse).
 
 ## Architecture
 
 ```text
-React Dashboard --> FastAPI --> LightGBM --> PostgreSQL --> Analytics / History
-                     |
-                     | 1) publish raw IEEE-CIS txn (CloudEvents)
-                     v
-              Fabric Eventstream (GraphGuard_API)
-                     |
-                     v
-              Lakehouse incoming table (stream v5)
-                     |
-                     v
-              Background sync (30s) --> LightGBM --> PostgreSQL
+React Dashboard ──► FastAPI
+                      │
+                      ├─1► Fabric Eventstream (GraphGuard_API / Event Hubs)
+                      │         └─► Lakehouse incoming (stream v5, raw IEEE-CIS)
+                      │
+                      ├─2► LightGBM score (fraud %, risk band)
+                      │
+                      └─3► Supabase PostgreSQL (prediction_records)
+                                └─► Overview / Analytics / Transactions
+
+Background every ~30s (optional path):
+  Lakehouse incoming ──► LightGBM ──► Supabase (new IDs only, idempotent)
 ```
 
-- **API scoring:** upload transaction JSON → LightGBM (438 features) → risk category → PostgreSQL → dashboard.
-- **Realtime Fabric:** `/predict` publishes the **raw** transaction to Eventstream **before** scoring; Lakehouse destination receives IEEE-CIS columns; a background worker polls the incoming table and upserts new scores into PostgreSQL (idempotent).
-- **Without Fabric credentials:** `/health` reports `fabric.status = not_configured`; Eventstream publish is skipped; API scoring still works.
-- **Not implemented:** writing prediction rows back to `realtime_fraud_predictions` (Postgres is the scoring store).
+| Component | Role |
+|-----------|------|
+| **Supabase Postgres** | Operational source of truth — scores, history, dashboard APIs |
+| **Microsoft Fabric** | Raw event ingest (Eventstream → Lakehouse); historical / Power BI analytics |
+| **LightGBM** | Fraud inference (438 features, threshold 0.10) |
+| **FastAPI** | Predict, publish, sync worker, analytics APIs |
+| **React** | UI |
+
+**Important:** Lakehouse incoming stores **raw** transactions. Scored results live in **Supabase** (`prediction_records`), not in the incoming table.
+
+- `/predict` order: publish raw txn to Fabric → score → persist to Supabase (immediate).
+- Sync worker: Lakehouse → score → Supabase for IDs not already stored (~30s).
+- **Not implemented:** writing scores back to Fabric `realtime_fraud_predictions`.
 
 ## Repository layout
 
 ```text
-backend/          FastAPI app, model bundle, tests
-frontend/         React + Vite + Tailwind dashboard
+backend/           FastAPI app, model bundle, tests
+frontend/          React + Vite + Tailwind dashboard
 docker-compose.yml
 .env.example
+docs/FABRIC.md
+docs/DEPLOYMENT.md
+scripts/           Fabric + Supabase verify helpers
 ```
 
 ## Prerequisites
 
-- Docker + Docker Compose (recommended for full stack)
-- Or locally: Python **3.11**, Node.js 20+, PostgreSQL 16
-- Model artifact: `backend/app/models/graphguard_prediction_bundle.joblib` (~26 MB)
+- Docker + Docker Compose
+- Or locally: Python **3.11**, Node.js 20+
+- Model: `backend/app/models/graphguard_prediction_bundle.joblib` (~26 MB)
+- Supabase project (recommended for shared multi-user history)
+- Fabric credentials (for realtime Eventstream; optional for local score-only demos)
 
-> **sklearn note:** the bundle was serialized with scikit-learn **1.6.1**. Runtime dependencies are pinned to that version. Host Python 3.14 is not supported for local venv installs; use Docker (Python 3.11) or install 3.11 locally.
+> **sklearn:** bundle needs scikit-learn **1.6.1**. Prefer Docker (Python 3.11); host 3.14 is unsupported for local venv.
 
-## Quick start (Docker Compose)
+## Quick start
 
 ```bash
 cp .env.example .env
-# Shared multi-user history: set DATABASE_URL to your Supabase Postgres URI (see docs/DEPLOYMENT.md)
-docker compose up --build
+# 1) Set DATABASE_URL to Supabase Session pooler (see below)
+# 2) Fill Fabric vars if you want Eventstream + sync
+docker compose up --build -d api web
 ```
-
-Services:
 
 | Service | URL |
 |---------|-----|
-| API | http://localhost:8000 |
-| API docs | http://localhost:8000/docs |
 | Frontend | http://localhost:3000 |
-| Postgres | Supabase via `DATABASE_URL`, or `docker compose --profile local-db` |
+| API | http://localhost:8000 |
+| Swagger | http://localhost:8000/docs |
+| Database | Supabase via `DATABASE_URL` |
 
-Smoke check:
+Local Docker Postgres only (not shared across machines):
 
 ```bash
-curl -s http://localhost:8000/health | jq
+docker compose --profile local-db up --build -d
+```
+
+### Supabase `DATABASE_URL` (shared history)
+
+1. Supabase → **Project Settings → Database → Connection string → URI**
+2. Use **Session pooler** (`:5432`) — not Transaction (`:6543`), prefer over Direct `db.*` inside Docker
+3. In `.env`:
+
+```bash
+DATABASE_URL="postgresql+psycopg2://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres?sslmode=require"
+```
+
+Helpers: `./scripts/fix_and_restart_supabase.sh` · `./scripts/verify_supabase_db.sh`  
+Details: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+**Never commit `.env`.** Share the Session-pooler URI with teammates out of band so everyone sees the same Overview.
+
+### Smoke check
+
+```bash
+curl -s http://localhost:8000/health | jq '{status, database, fabric: .fabric | {status, incoming_table, eventstream_configured}}'
+curl -s http://localhost:8000/fabric/sync-status | jq .
 curl -s -X POST http://localhost:8000/predict \
   -H 'Content-Type: application/json' \
-  -d "{\"transaction\": $(jq -c '. + {TransactionID: 2987000}' backend/sample_transaction.json)}"
+  -d "{\"transaction\": $(jq -c '. + {TransactionID: 2987001}' backend/sample_transaction.json)}"
+curl -s http://localhost:8000/analytics/summary | jq
 ```
 
 Expected parity for transaction **2987000** (tolerance `1e-5`):
@@ -72,6 +109,18 @@ Expected parity for transaction **2987000** (tolerance `1e-5`):
 - `predicted_fraud` = `0`
 - `risk_category` = `Low`
 - `threshold` = `0.10`
+
+## Where scores and reports live
+
+| Need | Where |
+|------|--------|
+| Fraud % / risk for one txn | Fraud Detection UI, `/predict` response, Supabase `prediction_records` |
+| Ops dashboard | **Overview**, **Analytics**, **Transactions** |
+| Aggregates API | `GET /analytics/summary`, `/analytics/trends`, … |
+| Raw events | Fabric Lakehouse incoming table |
+| Fabric Gold / Power BI | External Fabric analytics (not this UI) |
+
+UI upload: **Fraud Detection** → upload IEEE-CIS JSON (e.g. `backend/sample_transaction.json` + unique `TransactionID`) → **Predict**.
 
 ## Local development (without Compose)
 
@@ -82,7 +131,7 @@ cd backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export DATABASE_URL=sqlite:///./graphguard.db
+export DATABASE_URL=sqlite:///./graphguard.db   # or your Supabase URI
 export CORS_ORIGINS=http://localhost:5173
 uvicorn app.main:app --reload --port 8000
 ```
@@ -104,18 +153,18 @@ Vite proxies `/predict`, `/health`, `/transactions`, `/analytics`, and `/fabric`
 |--------|------|-------------|
 | GET | `/` | App status |
 | GET | `/health` | Model, DB, Fabric health |
-| POST | `/predict` | Publish raw txn to Eventstream, score, persist |
+| POST | `/predict` | Publish to Eventstream → score → Supabase |
 | POST | `/predict/batch` | Score up to `BATCH_MAX_SIZE` (default 100) |
-| GET | `/transactions` | History with search / risk filter / pagination |
+| GET | `/transactions` | History (search / risk / pagination) |
 | GET | `/analytics/summary` | Counts, fraud rate, risk distribution |
 | GET | `/analytics/trends` | Time-bucketed fraud stats |
-| GET | `/analytics/probability-distribution` | Probability histogram bins |
-| POST | `/fabric/sync-incoming` | Manual Lakehouse → score → Postgres sync |
-| GET | `/fabric/sync-status` | Background sync worker status |
-| GET | `/fabric/incoming/{id}` | Read-only Lakehouse incoming lookup |
-| GET | `/fabric/predictions/{id}` | Read-only Fabric prediction-table presence |
+| GET | `/analytics/probability-distribution` | Probability histogram |
+| POST | `/fabric/sync-incoming` | Manual Lakehouse → score → Supabase |
+| GET | `/fabric/sync-status` | Sync worker status |
+| GET | `/fabric/incoming/{id}` | Read-only Lakehouse lookup |
+| GET | `/fabric/predictions/{id}` | Fabric prediction-table presence |
 
-### Predict request
+### Predict request / response
 
 ```json
 {
@@ -126,10 +175,6 @@ Vite proxies `/predict`, `/health`, `/transactions`, `/analytics`, and `/fabric`
   }
 }
 ```
-
-Missing model features (for example identity columns) are filled using the saved training medians / `"MISSING"` categorical handling. The target column `isFraud` is ignored if present.
-
-### Predict response
 
 ```json
 {
@@ -144,21 +189,37 @@ Missing model features (for example identity columns) are filled using the saved
 }
 ```
 
-Risk bands: Low `< 0.10`, Medium `[0.10, 0.30)`, High `[0.30, 0.70)`, Critical `≥ 0.70`.
+Missing features are filled from training medians / `"MISSING"`. Risk bands: Low `< 0.10`, Medium `[0.10, 0.30)`, High `[0.30, 0.70)`, Critical `≥ 0.70`.
 
 ## Frontend pages
 
-- **Overview** – live summary, trends, recent transactions, API/model status
-- **Fraud Detection** – JSON upload, feature inspection, prediction result
-- **Analytics** – distribution / risk / trend / probability charts
-- **Transactions** – searchable, filterable, paginated history
-- **Settings** – read-only health, Fabric tables, and sync worker status (no secrets)
+- **Overview** — summary, trends, recent scored transactions  
+- **Fraud Detection** — JSON upload + prediction result  
+- **Analytics** — charts from Supabase history  
+- **Transactions** — searchable scored history  
+- **Settings** — model / DB / Fabric / sync status (no secrets)
 
-Hardcoded IEEE dataset demo values are not used as live metrics.
+## Microsoft Fabric
+
+Set in `.env` (never commit secrets). Full guide: [docs/FABRIC.md](docs/FABRIC.md).
+
+| Variable | Purpose |
+|----------|---------|
+| `FABRIC_SQL_ENDPOINT` / `FABRIC_DATABASE` | Lakehouse SQL |
+| `FABRIC_TENANT_ID` / `FABRIC_CLIENT_ID` / `FABRIC_CLIENT_SECRET` | Entra app |
+| `FABRIC_EVENTHUB_CONNECTION_STRING` / `FABRIC_EVENTHUB_NAME` | Active producer |
+| `FABRIC_INCOMING_TABLE` | Exact incoming table (live: `raphguard_incoming_events_stream_v5`) |
+| `FABRIC_PREDICTIONS_TABLE` | Read-only checks (`realtime_fraud_predictions`) |
+| `FABRIC_SYNC_ENABLED` | Background sync (default `true`) |
+| `FABRIC_SYNC_INTERVAL_SECONDS` | Poll interval (default `30`) |
+
+**Assets:** workspace `GraphGuard_Fabric_Analytics`, lakehouse `GraphGuard_Lakehouse`, eventstream `ES_GraphGuard_Lakehouse`, source `GraphGuard_API`.
+
+Without Fabric env: `/health` → `fabric.status = not_configured`; publish skipped; scoring + Supabase still work.
+
+Verify: `scripts/verify_fabric_auto_sync.sh`
 
 ## Testing
-
-### Backend
 
 ```bash
 docker build -t graphguard-api:test ./backend
@@ -169,76 +230,27 @@ docker run --rm \
   graphguard-api:test pytest -q
 ```
 
-Covers model load, parity for Tx `2987000`, health, predict/batch, persistence, analytics, and validation errors.
-
-### Frontend
-
 ```bash
-cd frontend
-npm test
-npm run build
+cd frontend && npm test && npm run build
 ```
-
-## Microsoft Fabric (optional)
-
-Set these in `.env` (never commit real secrets):
-
-| Variable | Purpose |
-|----------|---------|
-| `FABRIC_SQL_ENDPOINT` | Fabric / warehouse SQL endpoint host |
-| `FABRIC_DATABASE` | Database / lakehouse SQL database name |
-| `FABRIC_CLIENT_ID` | Entra app client ID |
-| `FABRIC_CLIENT_SECRET` | Entra app client secret |
-| `FABRIC_TENANT_ID` | Entra tenant ID |
-| `FABRIC_EVENTHUB_CONNECTION_STRING` | Event Hubs custom endpoint (active producer) |
-| `FABRIC_EVENTHUB_NAME` | Event hub name from the Custom endpoint |
-| `FABRIC_EVENTSTREAM_URL` | Optional HTTPS ingest (unused when Event Hub is set) |
-| `FABRIC_INCOMING_TABLE` | Exact Lakehouse incoming table name (must match Fabric) |
-| `FABRIC_PREDICTIONS_TABLE` | Predictions table for read-only checks |
-| `FABRIC_SYNC_ENABLED` | Background Lakehouse→Postgres sync (default `true`) |
-| `FABRIC_SYNC_INTERVAL_SECONDS` | Sync poll interval (default `30`) |
-| `FABRIC_TIMEOUT_SECONDS` | HTTP timeout (default 10) |
-| `FABRIC_MAX_RETRIES` | Retry count (default 2) |
-
-**Known workspace assets:** `GraphGuard_Fabric_Analytics` / `GraphGuard_Lakehouse` / `ES_GraphGuard_Lakehouse`  
-**Producer source:** Event Hubs custom endpoint (`FABRIC_EVENTHUB_*`), UI name `GraphGuard_API`  
-**Incoming table:** set `FABRIC_INCOMING_TABLE` to the **exact** Lakehouse name (verified live table uses stream v5 with raw IEEE-CIS columns; match spelling exactly)  
-**Gold tables:** read-only discovery only — never modified  
-
-Background sync polls the incoming table every `FABRIC_SYNC_INTERVAL_SECONDS`, scores new IDs, and upserts PostgreSQL. Manual: `POST /fabric/sync-incoming`. Status: `GET /fabric/sync-status`. Verify script: `scripts/verify_fabric_auto_sync.sh`.
-
-Without credentials in local `.env` (never commit secrets):
-
-1. `/health` → `fabric.status = "not_configured"`
-2. SQL probes do not run
-3. Eventstream publish is skipped (`status: skipped`)
-4. Local `/predict` + Postgres still work
-
-See [docs/FABRIC.md](docs/FABRIC.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-
-## Model artifact policy
-
-The trained bundle is currently tracked in Git (~26 MB) for continuity with the existing repo history.
-
-Recommended next step (requires maintainer approval):
-
-1. Move the artifact to Git LFS or a private model registry
-2. Document download/restore in CI
-3. Optionally rewrite history to remove the blob (**force-push**; not done automatically)
-
-Do not commit additional `.joblib` copies. Do not upload secrets or `.env` files.
 
 ## Configuration
 
-See [`.env.example`](.env.example) for all supported variables. `.env` is gitignored.
+See [`.env.example`](.env.example). `.env` is gitignored.
 
 ## Deployment status
 
 | Target | Status |
 |--------|--------|
-| Docker Compose (API + web + Postgres) | Supported — `docker compose up --build` |
-| Cloud (Azure hosting) | **Not deployed** — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| Fabric realtime ingest + auto-sync | **Verified** when `.env` Fabric credentials + Event Hub + incoming table are set |
+| Docker Compose (API + web) | Supported |
+| Supabase shared Postgres | Supported — set `DATABASE_URL` (Session pooler) |
+| Fabric ingest + auto-sync | Verified when Fabric + Event Hub + incoming table are set |
+| Hosted multi-user API + auth | **Not done** (GraphGuard 3.0) |
+| Cloud Azure deploy | **Not deployed** — [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+
+## Model artifact policy
+
+The trained bundle (~26 MB) is tracked in Git. Prefer Git LFS / private registry later. Do not commit extra `.joblib` files or secrets.
 
 ## License / dataset
 
