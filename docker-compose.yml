@@ -1,5 +1,10 @@
 services:
+  # Optional local Postgres. Skip when DATABASE_URL points at Supabase:
+  #   docker compose up --build api web
+  # Local DB stack:
+  #   docker compose --profile local-db up --build
   db:
+    profiles: ["local-db"]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: graphguard
@@ -21,11 +26,16 @@ services:
       context: ./backend
     ports:
       - "8000:8000"
+    # Prefer IPv4 DNS — Supabase direct hosts are often IPv6-only and break in Docker
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     env_file:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql+psycopg2://graphguard:graphguard@db:5432/graphguard
+      # Prefer .env DATABASE_URL (Supabase Session pooler recommended). Fallback = local-db.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://graphguard:graphguard@db:5432/graphguard}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
       MODEL_PATH: app/models/graphguard_prediction_bundle.joblib
       MODEL_VERSION: ${MODEL_VERSION:-graphguard-lgbm-v1}
@@ -52,12 +62,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 20s
-      retries: 5
-      start_period: 60s
+      interval: 15s
+      timeout: 25s
+      retries: 8
+      start_period: 120s
     restart: unless-stopped
 
   web:

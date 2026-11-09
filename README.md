@@ -44,6 +44,7 @@ docker-compose.yml
 
 ```bash
 cp .env.example .env
+# Shared multi-user history: set DATABASE_URL to your Supabase Postgres URI (see docs/DEPLOYMENT.md)
 docker compose up --build
 ```
 
@@ -54,7 +55,7 @@ Services:
 | API | http://localhost:8000 |
 | API docs | http://localhost:8000/docs |
 | Frontend | http://localhost:3000 |
-| Postgres | localhost:5432 (`graphguard` / `graphguard`) |
+| Postgres | Supabase via `DATABASE_URL`, or `docker compose --profile local-db` |
 
 Smoke check:
 

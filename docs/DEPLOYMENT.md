@@ -5,6 +5,7 @@
 ```bash
 cp .env.example .env
 # Fill Fabric SQL + Event Hub values. Set FABRIC_INCOMING_TABLE to the exact Lakehouse name.
+# For shared dashboard history, set DATABASE_URL to Supabase (see below).
 docker compose up --build -d
 ```
 
@@ -13,9 +14,36 @@ docker compose up --build -d
 | Frontend | http://localhost:3000 |
 | API | http://localhost:8000 |
 | Swagger | http://localhost:8000/docs |
-| Postgres | localhost:5432 |
+| Postgres | Supabase (shared) or Compose `local-db` profile |
 
-Compose includes restart policies and health checks for `db`, `api`, and `web`.
+### Supabase PostgreSQL (shared operational DB)
+
+Use one Supabase project so every machine sees the same predictions.
+
+1. Supabase → **Project Settings → Database → Connection string (URI)**.
+2. Prefer **Session** pooler (`:5432`) — **not** Transaction pooler (`:6543`) (advisory locks).  
+   Direct `db.<ref>.supabase.co` often fails inside Docker (IPv6-only DNS).
+3. In `.env` (Session pooler example):
+   ```bash
+   DATABASE_URL=postgresql+psycopg2://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:5432/postgres?sslmode=require
+   ```
+4. Auto-detect a working URL and restart:
+   ```bash
+   ./scripts/fix_and_restart_supabase.sh
+   ```
+   Or manually:
+   ```bash
+   docker compose build --no-cache api
+   docker compose up -d --force-recreate api web
+   curl -s http://127.0.0.1:8000/health | jq '.database'
+   ```
+5. Tables are created on API startup (`prediction_records`).
+
+Local-only Postgres (not shared):
+
+```bash
+docker compose --profile local-db up --build -d
+```
 
 ### Fabric realtime checklist
 
@@ -45,8 +73,8 @@ See [FABRIC.md](FABRIC.md) for schema rules and CloudEvents properties.
 
 - One container for API
 - One container for web (nginx static)
-- Azure Database for PostgreSQL Flexible Server
-- Secrets via Key Vault / Container Apps secrets
+- Supabase PostgreSQL (or Azure Database for PostgreSQL) as `DATABASE_URL`
+- Secrets via Key Vault / Container Apps secrets / Supabase dashboard
 
 ### High-level Azure steps (manual — billable)
 

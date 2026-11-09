@@ -5,6 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
 from app.db.models import Base
+from app.db.url import normalize_database_url
 
 config = context.config
 if config.config_file_name is not None:
@@ -12,7 +13,9 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option(
+    "sqlalchemy.url", normalize_database_url(settings.database_url)
+)
 
 
 def run_migrations_offline() -> None:
